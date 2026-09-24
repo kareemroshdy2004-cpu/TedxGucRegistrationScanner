@@ -55,6 +55,9 @@
   #result.show { display: flex; }
   #result.ok  { background: var(--ok); }
   #result.bad { background: var(--bad); }
+  #result.checking { background: #333; }
+  .spinner { width: 48px; height: 48px; border-radius: 50%; border: 5px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   #result.vip { box-shadow: inset 0 0 0 14px var(--gold); }
   .verdict { font-size: clamp(48px, 16vw, 96px); font-weight: 900; line-height: 1; letter-spacing: -2px; }
   .msg { font-size: 20px; margin: 12px 0 20px; font-weight: 600; }
@@ -186,7 +189,6 @@
   }
 
   async function checkIn(code, key) {
-    busy = true;
     try {
       const body = { action: 'checkin', token: store.get('tedx_token'), code };
       if (key) body.key = key;
@@ -239,17 +241,30 @@
     if (busy) return;
     const t = parseQR(text);
     if (!t) { busy = true; return show({ ok:false, status:'REJECTED', message:'This QR is not a TEDxGUC ticket.' }); }
+    busy = true;
+    flashChecking();
     checkIn(t.code, t.key);
+  }
+
+  function flashChecking() {
+    $('result').className = 'show checking';
+    $('verdict').textContent = '';
+    $('msg').textContent = 'Checking…';
+    $('ticketBox').innerHTML = '<div class="spinner"></div>';
   }
 
   // Lower resolution + native browser barcode decoder (when the phone supports it) removes
   // almost all of the lag; qrbox sized as a % of the video keeps the scan area steady on any screen.
   const SCAN_CONFIG = {
-    fps: 15,
-    qrbox: (vw, vh) => { const s = Math.floor(Math.min(vw, vh) * 0.7); return { width: s, height: s }; },
+    fps: 12,
+    qrbox: (vw, vh) => { const s = Math.floor(Math.min(vw, vh) * 0.75); return { width: s, height: s }; },
     aspectRatio: 1.0,
     disableFlip: false,
-    videoConstraints: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } },
+    videoConstraints: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 640 }, height: { ideal: 480 },
+      advanced: [{ focusMode: 'continuous' }]   // keeps the lens locked instead of hunting for focus
+    },
     experimentalFeatures: { useBarCodeDetectorIfSupported: true }
   };
 
