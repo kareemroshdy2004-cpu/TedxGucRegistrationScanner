@@ -235,21 +235,39 @@
     $('startBtn').style.display = '';
   }
 
+  function onScan(text) {
+    if (busy) return;
+    const t = parseQR(text);
+    if (!t) { busy = true; return show({ ok:false, status:'REJECTED', message:'This QR is not a TEDxGUC ticket.' }); }
+    checkIn(t.code, t.key);
+  }
+
+  // Lower resolution + native browser barcode decoder (when the phone supports it) removes
+  // almost all of the lag; qrbox sized as a % of the video keeps the scan area steady on any screen.
+  const SCAN_CONFIG = {
+    fps: 15,
+    qrbox: (vw, vh) => { const s = Math.floor(Math.min(vw, vh) * 0.7); return { width: s, height: s }; },
+    aspectRatio: 1.0,
+    disableFlip: false,
+    videoConstraints: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } },
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+  };
+
   $('startBtn').onclick = async () => {
     if (scanner) return;
-    scanner = new Html5Qrcode('reader');
+    scanner = new Html5Qrcode('reader', { verbose: false });
     try {
-      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 250 } },
-        text => {
-          if (busy) return;
-          const t = parseQR(text);
-          if (!t) { busy = true; return show({ ok:false, status:'REJECTED', message:'This QR is not a TEDxGUC ticket.' }); }
-          checkIn(t.code, t.key);
-        });
+      await scanner.start({ facingMode: { ideal: 'environment' } }, SCAN_CONFIG, onScan);
       $('startBtn').style.display = 'none';
     } catch (e) {
-      scanner = null;
-      alert('Camera could not start. Allow camera access and make sure the page is opened over https.');
+      try {
+        // Some phones reject the constraints above; fall back to the simplest possible request
+        await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 250 } }, onScan);
+        $('startBtn').style.display = 'none';
+      } catch (e2) {
+        scanner = null;
+        alert('Camera could not start. Allow camera access and make sure the page is opened over https.');
+      }
     }
   };
 
