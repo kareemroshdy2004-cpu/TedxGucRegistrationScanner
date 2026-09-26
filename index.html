@@ -58,6 +58,11 @@
   #result.checking { background: #333; }
   .spinner { width: 48px; height: 48px; border-radius: 50%; border: 5px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .confirming { font-size: 14px; opacity: .75; font-weight: 400; }
+  #result.shake { animation: shake .4s; }
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes shake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-10px); } 40%,80% { transform: translateX(10px); } }
+  }
   #result.vip { box-shadow: inset 0 0 0 14px var(--gold); }
   .verdict { font-size: clamp(48px, 16vw, 96px); font-weight: 900; line-height: 1; letter-spacing: -2px; }
   .msg { font-size: 20px; margin: 12px 0 20px; font-weight: 600; }
@@ -184,19 +189,44 @@
   function parseQR(text) {
     const code = (text.match(/Code:\s*([A-Z0-9]+)/i) || [])[1];
     const key  = (text.match(/Key:\s*([A-F0-9]+)/i) || [])[1];
-    if (code) return { code, key: key || 'MISSING' };        // a QR without a key is treated as fake
-    return null;
+    if (!code) return null;   // not a TEDxGUC ticket at all
+
+    const name  = (text.match(/Name:\s*(.+)/) || [])[1] || '';
+    const phone = (text.match(/Phone:\s*(.+)/) || [])[1] || '';
+    const type  = /Type:\s*VIP/i.test(text) ? 'VIP' : 'Regular';
+    const gucM  = (text.match(/GUCian:\s*(.+)/) || [])[1] || '';
+    const gucian = /^yes/i.test(gucM);
+    const gucId = (gucM.match(/\(([^)]+)\)/) || [])[1] || '';
+
+    // A QR without a key is treated as fake -- key stays 'MISSING' so checkIn_ rejects it
+    return { code, key: key || 'MISSING', name, phone, type, gucian, gucId };
   }
 
-  async function checkIn(code, key) {
+  async function checkIn(code, key, provisional) {
     try {
       const body = { action: 'checkin', token: store.get('tedx_token'), code };
       if (key) body.key = key;
       const res = await api(body);
       if (res.status === 'LOGIN') { busy = false; return showLogin('Your session ended. Please log in again.'); }
-      show(res);
+
+      if (provisional) {
+        // Only touch the screen again if the server DISAGREES with what's already shown
+        if (res.ok && res.status === 'ACCEPTED') {
+          const tag = document.querySelector('.confirming');
+          if (tag) tag.remove();   // quietly drop the "Confirming..." label, nothing else changes
+        } else {
+          correctToRejected(res);
+        }
+      } else {
+        show(res);
+      }
     } catch (e) {
-      show({ ok:false, status:'ERROR', message:'No connection to the sheet. Check the internet and try again.' });
+      if (provisional) {
+        const tag = document.querySelector('.confirming');
+        if (tag) tag.textContent = 'Not confirmed – check connection';
+      } else {
+        show({ ok:false, status:'ERROR', message:'No connection to the sheet. Check the internet and try again.' });
+      }
     }
   }
 
@@ -242,15 +272,43 @@
     const t = parseQR(text);
     if (!t) { busy = true; return show({ ok:false, status:'REJECTED', message:'This QR is not a TEDxGUC ticket.' }); }
     busy = true;
-    flashChecking();
-    checkIn(t.code, t.key);
+    showProvisional(t);
+    checkIn(t.code, t.key, t);
   }
 
-  function flashChecking() {
-    $('result').className = 'show checking';
-    $('verdict').textContent = '';
-    $('msg').textContent = 'Checking…';
-    $('ticketBox').innerHTML = '<div class="spinner"></div>';
+  // Shown the instant the camera reads the QR -- built from the ticket itself, no waiting.
+  // A small "Confirming…" tag shows this hasn't been verified by the sheet yet.
+  function showProvisional(t) {
+    $('result').className = 'show ok' + (t.type === 'VIP' ? ' vip' : '');
+    $('verdict').textContent = 'ACCEPTED';
+    $('msg').innerHTML = 'Welcome, ' + esc(t.name.split(' ')[0]) + '! <span class="confirming">Confirming…</span>';
+    $('ticketBox').innerHTML = `
+      <span class="badge ${esc(t.type)}">${t.type === 'VIP' ? '★ VIP ★' : 'Regular'}</span>
+      <div class="ticket">
+        <div>Ticket <b>${esc(t.code)}</b></div>
+        <div>Name <b>${esc(t.name)}</b></div>
+        <div>Phone <b>${esc(t.phone)}</b></div>
+        <div>GUCian <b>${t.gucian ? 'Yes' + (t.gucId ? ' – ' + esc(t.gucId) : '') : 'No'}</b></div>
+      </div>`;
+    beep(true);
+    count++; store.set('tedx_count', count); $('count').textContent = count + ' checked in on this device';
+  }
+
+  // Corrects the screen if the server disagrees with the provisional accept above
+  // (already used at another gate, fake key, or a real ticket-type mismatch).
+  function correctToRejected(res) {
+    count--; store.set('tedx_count', count); $('count').textContent = count + ' checked in on this device';
+    $('result').className = 'show bad shake';
+    $('verdict').textContent = 'REJECTED';
+    $('msg').textContent = res.message || 'This ticket was not valid after all.';
+    const i = res.info;
+    $('ticketBox').innerHTML = i ? `
+      <span class="badge ${esc(i.type)}">${i.type === 'VIP' ? '★ VIP ★' : 'Regular'}</span>
+      <div class="ticket">
+        <div>Ticket <b>${esc(i.code)}</b></div>
+        <div>Name <b>${esc(i.name)}</b></div>
+      </div>` : '';
+    beep(false);
   }
 
   // Lower resolution + native browser barcode decoder (when the phone supports it) removes
